@@ -6,10 +6,9 @@
 #define T 1e-5
 using namespace std;
 
-float calc_distance(float *point, float *centroids, int fratures)
+inline float calc_distance(float *point, float *centroids, int fratures)
 {
     float distance = 0;
-    int i;
     for (int i = 0; i < fratures; ++i)
     {
         float diff = point[i] - centroids[i];
@@ -18,30 +17,38 @@ float calc_distance(float *point, float *centroids, int fratures)
     // avoiding SQRT for performance
     return distance;
 }
+/*
+    1,2 
+    2,3
 
-void k_means(float *points, float *centroids, int *labels, int num_points, size_t features, size_t num_clusters, size_t max_epochs)
+    1  3 = 3
+    2  5 = 5
+    2
+    3
+*/
+void k_means(float *points, float *centroids, int *labels, size_t num_points, size_t num_features, size_t num_cetroids, size_t max_epochs)
 {
     int epochs = 0;
     float error = std::numeric_limits<float>::max();
     float prev_error = error;
-    float *new_centroids = (float *)malloc(sizeof(*centroids) * num_clusters * features);
-    int *counts = (int *)malloc(sizeof(*counts) * num_clusters);
+    float *new_centroids = (float *)malloc(sizeof(*centroids) * num_cetroids * num_features);
+    int *counts = (int *)malloc(sizeof(*counts) * num_cetroids);
     do
     {
-        memset(counts, 0, sizeof(*counts) * num_clusters);
-        memset(new_centroids, 0, sizeof(*new_centroids) * num_clusters * features);
+        memset(counts, 0, sizeof(*counts) * num_cetroids);
+        memset(new_centroids, 0, sizeof(*new_centroids) * num_cetroids * num_features);
 
         prev_error = error;
         error = 0;
         // 1. Calculate for each point the error
-        int i, j, h;
-        for (int i = 0; i < num_points; ++i)
+        size_t i, j, h;
+        for (size_t i = 0; i < num_points; ++i)
         {
             // 1.1 Find the nearest cenrtroid
             float min_distance = std::numeric_limits<float>::max();
-            for (int j = 0; j < num_clusters; ++j)
+            for (size_t j = 0; j < num_cetroids; ++j)
             {
-                float distance = calc_distance(points + (i * features), centroids + (j * features), features);
+                float distance = calc_distance(points + (i * num_features), centroids + (j * num_features), num_features);
                 if (distance < min_distance)
                 {
                     // set new cluster for the point h
@@ -51,16 +58,17 @@ void k_means(float *points, float *centroids, int *labels, int num_points, size_
             }
             // Updates cluster
             counts[labels[i]]++;
-            for (h = 0; h < features; ++h)
-                new_centroids[labels[i] * features + h] += points[i * features + h];
+
+            for (h = 0; h < num_features; ++h)
+                new_centroids[labels[i] * num_features + h] += points[i * num_features + h];
 
             error += min_distance;
-        }
+        } // END POINTS LOOP
         epochs++;
-        for (j = 0; j < num_clusters; ++j)
+        for (j = 0; j < num_cetroids; ++j)
             if (counts[j] > 0)
-                for (h = 0; h < features; ++h)
-                    centroids[j * features + h] = new_centroids[j * features + h] / counts[j];
+                for (h = 0; h < num_features; ++h)
+                    centroids[j * num_features + h] = new_centroids[j * num_features + h] / counts[j];
 
     } while (max_epochs > epochs && (fabs(prev_error - error)) > T);
     // unecessary for short executions
