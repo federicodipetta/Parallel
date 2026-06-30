@@ -14,19 +14,19 @@ ARCH ?= sm_75
 
 CXX      = g++
 NVCC     = nvcc
-CXXFLAGS = -O3 -std=c++17 -Wall
+CXXFLAGS = -O3 -std=c++17 -Wall -D 
 NVCCFLAGS= -O3 -std=c++17 -arch=$(ARCH)
 
 TARGET = fcm_fuzzy
 
-OBJS = main.o dataset.o fcm_cpu.o #fcm_gpu.o
+OBJS = main.o dataset.o fcm_cpu.o fcm_gpu.o
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJS)
 
-main.o: main.cpp dataset.h fcm_cpu.h #fcm_gpu.cuh
+main.o: main.cpp dataset.h fcm_cpu.h fcm_gpu.cuh
 	$(CXX) $(CXXFLAGS) -c main.cpp -o main.o
 
 dataset.o: dataset.cpp dataset.h

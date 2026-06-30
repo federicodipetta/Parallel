@@ -5,14 +5,18 @@
 #include <cstring>
 #include <cmath>
 
-#define CUDA_CHECK(call)                                                      \
-    do {                                                                      \
-        cudaError_t err__ = (call);                                           \
-        if (err__ != cudaSuccess) {                                          \
-            fprintf(stderr, "Errore CUDA in %s:%d -> %s\n",                  \
-                    __FILE__, __LINE__, cudaGetErrorString(err__));          \
-            std::exit(1);                                                    \
-        }                                                                     \
+#define Dim 41
+
+#define CUDA_CHECK(call)                                            \
+    do                                                              \
+    {                                                               \
+        cudaError_t err__ = (call);                                 \
+        if (err__ != cudaSuccess)                                   \
+        {                                                           \
+            fprintf(stderr, "Errore CUDA in %s:%d -> %s\n",         \
+                    __FILE__, __LINE__, cudaGetErrorString(err__)); \
+            std::exit(1);                                           \
+        }                                                           \
     } while (0)
 
 // ---------------------------------------------------------------------------
@@ -21,20 +25,25 @@
 // Pattern di accesso regolare (coalesced sui dati del punto), nessun branch
 // dipendente dai dati -> buon utilizzo dei warp.
 // ---------------------------------------------------------------------------
-__global__ void kernel_compute_distances(const float* __restrict__ data,
-                                          const float* __restrict__ C,
-                                          int N, int D, int K,
-                                          float* __restrict__ dist) {
+__global__ void kernel_compute_distances(const float *__restrict__ data,
+                                         const float *__restrict__ C,
+                                         int N, int D, int K,
+                                         float *__restrict__ dist)
+{
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= N) return;
+    if (i >= N)
+        return;
 
-    const float* x = data + (size_t)i * D;
-    float* di = dist + (size_t)i * K;
+    const float *x = data + (size_t)i * D;
+    float *di = dist + (size_t)i * K;
 
-    for (int j = 0; j < K; ++j) {
-        const float* c = C + (size_t)j * D;
+    for (int j = 0; j < K; ++j)
+    {
+        const float *c = C + (size_t)j * D;
         float s = 0.0f;
-        for (int d = 0; d < D; ++d) {
+#pragma unroll
+        for (int d = 0; d < Dim; ++d)
+        {
             float diff = x[d] - c[d];
             s += diff * diff;
         }
@@ -47,17 +56,20 @@ __global__ void kernel_compute_distances(const float* __restrict__ data,
 // calcolate. Un thread per punto i.
 //   u_ij = 1 / sum_k ( d_ij / d_ik )^(2/(m-1))
 // ---------------------------------------------------------------------------
-__global__ void kernel_update_memberships(const float* __restrict__ dist,
-                                           int N, int K, float m,
-                                           float* __restrict__ U) {
+__global__ void kernel_update_memberships(const float *__restrict__ dist,
+                                          int N, int K, float m,
+                                          float *__restrict__ U)
+{
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= N) return;
+    if (i >= N)
+        return;
 
     float exponent = 2.0f / (m - 1.0f);
-    const float* di = dist + (size_t)i * K;
-    float* ui = U + (size_t)i * K;
+    const float *di = dist + (size_t)i * K;
+    float *ui = U + (size_t)i * K;
 
-    for (int j = 0; j < K; ++j) {
+    for (int j = 0; j < K; ++j)
+    {
         float sum = 0.0f;
         for (int kk = 0; kk < K; ++kk)
             sum += powf(di[j] / di[kk], exponent);
@@ -77,22 +89,26 @@ __global__ void kernel_update_memberships(const float* __restrict__ dist,
 // La versione kernel_accumulate_centroids_shared, poco sotto, risolve questo
 // problema accumulando prima in shared memory per blocco.
 // ---------------------------------------------------------------------------
-__global__ void kernel_accumulate_centroids(const float* __restrict__ data,
-                                             const float* __restrict__ U,
-                                             int N, int D, int K, float m,
-                                             float* __restrict__ num,
-                                             float* __restrict__ den) {
+__global__ void kernel_accumulate_centroids(const float *__restrict__ data,
+                                            const float *__restrict__ U,
+                                            int N, int D, int K, float m,
+                                            float *__restrict__ num,
+                                            float *__restrict__ den)
+{
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= N) return;
+    if (i >= N)
+        return;
 
-    const float* x = data + (size_t)i * D;
-    const float* u = U + (size_t)i * K;
+    const float *x = data + (size_t)i * D;
+    const float *u = U + (size_t)i * K;
 
-    for (int j = 0; j < K; ++j) {
+    for (int j = 0; j < K; ++j)
+    {
         float w = powf(u[j], m);
         atomicAdd(&den[j], w);
-        float* nj = num + (size_t)j * D;
-        for (int d = 0; d < D; ++d)
+        float *nj = num + (size_t)j * D;
+#pragma unroll
+        for (int d = 0; d < Dim; ++d)
             atomicAdd(&nj[d], w * x[d]);
     }
 }
@@ -111,14 +127,15 @@ __global__ void kernel_accumulate_centroids(const float* __restrict__ data,
 // Dimensione della shared memory richiesta: (K*D + K) float, allocata
 // dinamicamente al momento del lancio del kernel (vedi fcm_gpu_run_internal).
 // ---------------------------------------------------------------------------
-__global__ void kernel_accumulate_centroids_shared(const float* __restrict__ data,
-                                                     const float* __restrict__ U,
-                                                     int N, int D, int K, float m,
-                                                     float* __restrict__ num,
-                                                     float* __restrict__ den) {
+__global__ void kernel_accumulate_centroids_shared(const float *__restrict__ data,
+                                                   const float *__restrict__ U,
+                                                   int N, int D, int K, float m,
+                                                   float *__restrict__ num,
+                                                   float *__restrict__ den)
+{
     extern __shared__ float sdata[];
-    float* s_num = sdata;              // K*D float: accumulatore locale al blocco
-    float* s_den = sdata + (size_t)K * D; // K float
+    float *s_num = sdata;                 // K*D float: accumulatore locale al blocco
+    float *s_den = sdata + (size_t)K * D; // K float
 
     int tid = threadIdx.x;
     int total_shared = K * D + K;
@@ -129,15 +146,18 @@ __global__ void kernel_accumulate_centroids_shared(const float* __restrict__ dat
     __syncthreads();
 
     int i = blockIdx.x * blockDim.x + tid;
-    if (i < N) {
-        const float* x = data + (size_t)i * D;
-        const float* u = U + (size_t)i * K;
-        for (int j = 0; j < K; ++j) {
+    if (i < N)
+    {
+        const float *x = data + (size_t)i * D;
+        const float *u = U + (size_t)i * K;
+        for (int j = 0; j < K; ++j)
+        {
             float w = powf(u[j], m);
-            atomicAdd(&s_den[j], w);          // atomic su shared, non su globale
-            float* nj = s_num + (size_t)j * D;
-            for (int d = 0; d < D; ++d)
-                atomicAdd(&nj[d], w * x[d]);  // atomic su shared, non su globale
+            atomicAdd(&s_den[j], w); // atomic su shared, non su globale
+            float *nj = s_num + (size_t)j * D;
+#pragma unroll
+            for (int d = 0; d < Dim; ++d)
+                atomicAdd(&nj[d], w * x[d]); // atomic su shared, non su globale
         }
     }
     __syncthreads();
@@ -151,17 +171,20 @@ __global__ void kernel_accumulate_centroids_shared(const float* __restrict__ dat
 
 // Kernel 3b: finalizza i centroidi dividendo numeratore/denominatore.
 // Un thread per cluster j.
-__global__ void kernel_finalize_centroids(const float* __restrict__ num,
-                                           const float* __restrict__ den,
-                                           int K, int D,
-                                           float* __restrict__ C) {
+__global__ void kernel_finalize_centroids(const float *__restrict__ num,
+                                          const float *__restrict__ den,
+                                          int K, int D,
+                                          float *__restrict__ C)
+{
     int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j >= K) return;
+    if (j >= K)
+        return;
 
     float denom = (den[j] < 1e-12f) ? 1e-12f : den[j];
-    float* cj = C + (size_t)j * D;
-    const float* nj = num + (size_t)j * D;
-    for (int d = 0; d < D; ++d)
+    float *cj = C + (size_t)j * D;
+    const float *nj = num + (size_t)j * D;
+#pragma unroll
+    for (int d = 0; d < Dim; ++d)
         cj[d] = nj[d] / denom;
 }
 
@@ -173,78 +196,82 @@ __global__ void kernel_finalize_centroids(const float* __restrict__ num,
 // il trucco e' corretto e ci evita di scaricare l'intera matrice U sull'host
 // ad ogni iterazione (servirebbe solo per il check di convergenza).
 // ---------------------------------------------------------------------------
-__global__ void kernel_max_diff(const float* __restrict__ U_new,
-                                 const float* __restrict__ U_prev,
-                                 int size, unsigned int* max_bits) {
+__global__ void kernel_max_diff(const float *__restrict__ U_new,
+                                const float *__restrict__ U_prev,
+                                int size, unsigned int *max_bits)
+{
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= size) return;
+    if (idx >= size)
+        return;
 
     float diff = fabsf(U_new[idx] - U_prev[idx]);
     atomicMax(max_bits, __float_as_uint(diff));
 }
 
 // ---------------------------------------------------------------------------
-// Driver host: alloca memoria device, copia i dati, esegue il ciclo di
-// iterazioni Fuzzy C-Means e riporta i risultati sull'host.
-//
-// use_shared_centroids = false -> kernel_accumulate_centroids (atomic su
-//                                  memoria globale, un atomicAdd per thread)
-// use_shared_centroids = true  -> kernel_accumulate_centroids_shared
-//                                  (accumulo in shared memory per blocco)
+// Driver host: allocate device memory, copy data, launch kernels, copy results back.
 // ---------------------------------------------------------------------------
-static double fcm_gpu_run_internal(const float* data, int N, int D, int K, float m,
-                                    int max_iter, float tol,
-                                    const float* U_init,
-                                    float* U_out, float* C_out, int* iters_out,
-                                    bool use_shared_centroids) {
+double fcm_gpu_run(const float *data, int N, int D, int K, float m,
+                   int max_iter, float tol,
+                   const float *U_init,
+                   float *U_out, float *C_out, int *iters_out,
+                   int nThreads)
+{
     float *d_data = nullptr, *d_U = nullptr, *d_U_prev = nullptr, *d_C = nullptr;
     float *d_dist = nullptr, *d_num = nullptr, *d_den = nullptr;
-    unsigned int* d_max_bits = nullptr;
+    unsigned int *d_max_bits = nullptr;
+    if (D != Dim)
+    {
+        fprintf(stderr, "[fcm_gpu] Errore: D=%d > %d (Dim) non supportato.\n", D, Dim);
+        std::exit(1);
+    }
 
     size_t data_bytes = (size_t)N * D * sizeof(float);
-    size_t U_bytes    = (size_t)N * K * sizeof(float);
-    size_t C_bytes    = (size_t)K * D * sizeof(float);
+    size_t U_bytes = (size_t)N * K * sizeof(float);
+    size_t C_bytes = (size_t)K * D * sizeof(float);
 
     CUDA_CHECK(cudaMalloc(&d_data, data_bytes));
     CUDA_CHECK(cudaMalloc(&d_U, U_bytes));
     CUDA_CHECK(cudaMalloc(&d_U_prev, U_bytes));
     CUDA_CHECK(cudaMalloc(&d_C, C_bytes));
-    CUDA_CHECK(cudaMalloc(&d_dist, U_bytes));     // N x K, come U
-    CUDA_CHECK(cudaMalloc(&d_num, C_bytes));      // K x D, come C
+    CUDA_CHECK(cudaMalloc(&d_dist, U_bytes)); // N x K, come U
+    CUDA_CHECK(cudaMalloc(&d_num, C_bytes));  // K x D, come C
     CUDA_CHECK(cudaMalloc(&d_den, (size_t)K * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_max_bits, sizeof(unsigned int)));
 
     CUDA_CHECK(cudaMemcpy(d_data, data, data_bytes, cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_U, U_init, U_bytes, cudaMemcpyHostToDevice));
 
-    const int threads = 256;
-    const int blocksN  = (N + threads - 1) / threads;
-    const int blocksK  = (K + threads - 1) / threads;
+    const int threads = (nThreads > 0) ? nThreads : 256;
+    const int blocksN = (N + threads - 1) / threads;
+    const int blocksK = (K + threads - 1) / threads;
     const int blocksNK = ((N * K) + threads - 1) / threads;
+    printf("GPU kernel launch configuration: %d threads/block, %d blocks for N, %d blocks for K, %d blocks for N*K\n",
+           threads, blocksN, blocksK, blocksNK);
 
     // --- setup shared memory per il kernel di accumulo centroidi (se richiesto) ---
     size_t shared_bytes = ((size_t)K * D + (size_t)K) * sizeof(float);
-    bool shared_ok = use_shared_centroids;
 
-    if (use_shared_centroids) {
-        int device = 0;
-        CUDA_CHECK(cudaGetDevice(&device));
-        int max_optin = 0;
-        CUDA_CHECK(cudaDeviceGetAttribute(&max_optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, device));
+    int device = 0;
+    CUDA_CHECK(cudaGetDevice(&device));
+    int max_optin = 0;
+    CUDA_CHECK(cudaDeviceGetAttribute(&max_optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, device));
 
-        if (shared_bytes > (size_t)max_optin) {
-            fprintf(stderr,
-                    "[fcm_gpu] Attenzione: K*D=%d richiede %zu byte di shared memory, "
-                    "ma il massimo disponibile su questa GPU e' %d byte. "
-                    "Ricado sulla versione atomica semplice per i centroidi.\n",
-                    K * D, shared_bytes, max_optin);
-            shared_ok = false;
-        } else if (shared_bytes > 48 * 1024) {
-            // Sopra i 48KB di default serve l'opt-in esplicito (Volta+)
-            CUDA_CHECK(cudaFuncSetAttribute(kernel_accumulate_centroids_shared,
-                                             cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                             (int)shared_bytes));
-        }
+    if (shared_bytes > (size_t)max_optin)
+    {
+        fprintf(stderr,
+                "[fcm_gpu] Attenzione: K*D=%d richiede %zu byte di shared memory, "
+                "ma il massimo disponibile su questa GPU e' %d byte. "
+                "Ricado sulla versione atomica semplice per i centroidi.\n",
+                K * D, shared_bytes, max_optin);
+        std::exit(1);
+    }
+    else if (shared_bytes > 48 * 1024)
+    {
+        // Sopra i 48KB di default serve l'opt-in esplicito (Volta+)
+        CUDA_CHECK(cudaFuncSetAttribute(kernel_accumulate_centroids_shared,
+                                        cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                        (int)shared_bytes));
     }
 
     cudaEvent_t start, stop;
@@ -253,18 +280,15 @@ static double fcm_gpu_run_internal(const float* data, int N, int D, int K, float
     CUDA_CHECK(cudaEventRecord(start));
 
     int it = 0;
-    for (; it < max_iter; ++it) {
+    for (; it < max_iter; ++it)
+    {
         // --- update centroidi ---
         CUDA_CHECK(cudaMemset(d_num, 0, C_bytes));
         CUDA_CHECK(cudaMemset(d_den, 0, (size_t)K * sizeof(float)));
 
-        if (shared_ok) {
-            kernel_accumulate_centroids_shared<<<blocksN, threads, shared_bytes>>>(
-                d_data, d_U, N, D, K, m, d_num, d_den);
-        } else {
-            kernel_accumulate_centroids<<<blocksN, threads>>>(
-                d_data, d_U, N, D, K, m, d_num, d_den);
-        }
+        kernel_accumulate_centroids_shared<<<blocksN, threads, shared_bytes>>>(
+            d_data, d_U, N, D, K, m, d_num, d_den);
+
         kernel_finalize_centroids<<<blocksK, threads>>>(d_num, d_den, K, D, d_C);
 
         // --- salva U corrente per il check di convergenza ---
@@ -284,7 +308,11 @@ static double fcm_gpu_run_internal(const float* data, int N, int D, int K, float
         float max_diff;
         std::memcpy(&max_diff, &max_bits_host, sizeof(float));
 
-        if (max_diff < tol) { ++it; break; }
+        if (max_diff < tol)
+        {
+            ++it;
+            break;
+        }
     }
 
     CUDA_CHECK(cudaEventRecord(stop));
@@ -295,28 +323,19 @@ static double fcm_gpu_run_internal(const float* data, int N, int D, int K, float
 
     CUDA_CHECK(cudaMemcpy(U_out, d_U, U_bytes, cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(C_out, d_C, C_bytes, cudaMemcpyDeviceToHost));
-    if (iters_out) *iters_out = it;
+    if (iters_out)
+        *iters_out = it;
 
-    cudaFree(d_data); cudaFree(d_U); cudaFree(d_U_prev); cudaFree(d_C);
-    cudaFree(d_dist); cudaFree(d_num); cudaFree(d_den); cudaFree(d_max_bits);
+    cudaFree(d_data);
+    cudaFree(d_U);
+    cudaFree(d_U_prev);
+    cudaFree(d_C);
+    cudaFree(d_dist);
+    cudaFree(d_num);
+    cudaFree(d_den);
+    cudaFree(d_max_bits);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
     return (double)elapsed_ms;
-}
-
-double fcm_gpu_run(const float* data, int N, int D, int K, float m,
-                    int max_iter, float tol,
-                    const float* U_init,
-                    float* U_out, float* C_out, int* iters_out) {
-    return fcm_gpu_run_internal(data, N, D, K, m, max_iter, tol, U_init,
-                                 U_out, C_out, iters_out, /*use_shared_centroids=*/false);
-}
-
-double fcm_gpu_shared_run(const float* data, int N, int D, int K, float m,
-                           int max_iter, float tol,
-                           const float* U_init,
-                           float* U_out, float* C_out, int* iters_out) {
-    return fcm_gpu_run_internal(data, N, D, K, m, max_iter, tol, U_init,
-                                 U_out, C_out, iters_out, /*use_shared_centroids=*/true);
 }

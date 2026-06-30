@@ -5,6 +5,8 @@
 #include <cstring>
 #include <cmath>
 
+#define Dim 41
+
 #define CUDA_CHECK(call)                                            \
     do                                                              \
     {                                                               \
@@ -39,7 +41,8 @@ __global__ void kernel_compute_distances(const float *__restrict__ data,
     {
         const float *c = C + (size_t)j * D;
         float s = 0.0f;
-        for (int d = 0; d < D; ++d)
+#pragma unroll
+        for (int d = 0; d < Dim; ++d)
         {
             float diff = x[d] - c[d];
             s += diff * diff;
@@ -104,7 +107,8 @@ __global__ void kernel_accumulate_centroids(const float *__restrict__ data,
         float w = powf(u[j], m);
         atomicAdd(&den[j], w);
         float *nj = num + (size_t)j * D;
-        for (int d = 0; d < D; ++d)
+#pragma unroll
+        for (int d = 0; d < Dim; ++d)
             atomicAdd(&nj[d], w * x[d]);
     }
 }
@@ -123,7 +127,8 @@ __global__ void kernel_finalize_centroids(const float *__restrict__ num,
     float denom = (den[j] < 1e-12f) ? 1e-12f : den[j];
     float *cj = C + (size_t)j * D;
     const float *nj = num + (size_t)j * D;
-    for (int d = 0; d < D; ++d)
+#pragma unroll
+    for (int d = 0; d < Dim; ++d)
         cj[d] = nj[d] / denom;
 }
 

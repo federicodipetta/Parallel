@@ -7,3 +7,9 @@ data/
 |___ kddcup.data # complete dataset
 |___ kddcupdata_10_percent # test
 ```
+
+
+Grafci da generare:
+
+
+BlockSize ()
